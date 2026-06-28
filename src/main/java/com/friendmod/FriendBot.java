@@ -2,9 +2,11 @@ package com.friendmod;
 
 import carpet.patches.EntityPlayerMPFake;
 import carpet.helpers.EntityPlayerActionPack;
+import carpet.network.ServerPlayerInterface;
 import net.minecraft.block.Blocks;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.mob.MobEntity;
+import net.minecraft.entity.mob.HostileEntity;
 import net.minecraft.entity.vehicle.BoatEntity;
 import net.minecraft.entity.passive.HorseBaseEntity;
 import net.minecraft.entity.vehicle.AbstractMinecartEntity;
@@ -18,25 +20,6 @@ import net.minecraft.world.GameMode;
 
 import java.util.*;
 
-/**
- * FriendBot v3.1
- * ==============
- * Friend is a REAL EntityPlayerMPFake — a full player entity.
- * Requires Carpet Mod 1.4.194 for Minecraft 1.21.11.
- *
- * v3.1 additions over v3.0:
- *   - Real navigation via FriendNav: opens/closes doors+gates+trapdoors while
- *     walking, swims, climbs ladders, steps up ledges, instead of crude bump-jump.
- *   - Real inventory via FriendInventory: auto-equips best armor, auto-switches
- *     to the right tool/weapon for the situation, auto-eats when hungry.
- *   - Riding boats/horses/minecarts, dismounting, giving items, opening
- *     chests/doors on request.
- *   - Occasional unprompted reactions to the world (danger, low health, time
- *     of day) so she talks like she's actually there, not just answering.
- *
- * Movement uses direct position + velocity control (server-side).
- * Actions use EntityPlayerActionPack for authentic player interactions.
- */
 public class FriendBot {
 
     public enum BotState {
@@ -53,29 +36,19 @@ public class FriendBot {
     private final FriendCrafting crafting = new FriendCrafting();
     private final Random random = new Random();
 
-    // The fake player entity — IS a real ServerPlayerEntity
     private EntityPlayerMPFake fakePlayer = null;
 
     private int tickCounter  = 0;
     private int stateTimer   = 0;
     private int respawnDelay = 0;
     private int dangerCooldown = 0;
-    private int proactiveCooldown = 200; // wait a bit after spawn before first unprompted line
+    private int proactiveCooldown = 200;
 
-    // Mining
     private BlockPos mineTarget = null;
     private int mineBreakTimer = 0;
-
-    // Building
     private int buildStep = 0;
-
-    // Exploring
     private Vec3d exploreTarget = null;
-
-    // Who Friend is currently following
     private volatile String followingPlayerName = null;
-
-    // What item (free text) was last requested via "Friend craft me X" / "make me X"
     private volatile String pendingCraftRequest = null;
     private volatile String pendingCraftPlayerName = null;
 
@@ -84,11 +57,11 @@ public class FriendBot {
         this.geminiClient = new GeminiClient();
     }
 
-    // =========================================================================
-    // SPAWN / DESPAWN
-    // =========================================================================
+    // Helper to get the action pack from a fake player
+    private EntityPlayerActionPack actionPack() {
+        return ((ServerPlayerInterface) fakePlayer).getActionPack();
+    }
 
-    /** Must be called on the server thread. */
     public void spawn() {
         ServerWorld world = server.getOverworld();
         ServerPlayerEntity nearest = getNearestRealPlayer();
@@ -144,10 +117,6 @@ public class FriendBot {
         return null;
     }
 
-    // =========================================================================
-    // TICK (called 20x/sec on server thread)
-    // =========================================================================
-
     public void tick() {
         tickCounter++;
         stateTimer++;
@@ -168,22 +137,17 @@ public class FriendBot {
         if (dangerCooldown > 0) dangerCooldown--;
         if (proactiveCooldown > 0) proactiveCooldown--;
 
-        // Auto-equip best weapon/armor every 5 seconds
         if (tickCounter % 100 == 0) {
             smartInv.autoEquipArmor(fakePlayer);
             if (currentState == BotState.FIGHTING) smartInv.autoEquipWeapon(fakePlayer);
         }
 
-        // Auto-eat check every second
         if (tickCounter % 20 == 0) smartInv.autoEat(fakePlayer);
 
-        // Danger check every second
         if (currentState != BotState.FIGHTING && dangerCooldown == 0 && tickCounter % 20 == 0) {
             checkForDanger();
         }
 
-        // Occasional unprompted reaction to the world, like a real person would say something
-        // without being asked. Only when she's not mid-task (would be annoying mid-fight/mine).
         if (proactiveCooldown == 0 && (currentState == BotState.FOLLOWING || currentState == BotState.IDLE)
                 && tickCounter % 20 == 0 && random.nextInt(100) < 2) {
             maybeReactToWorld();
@@ -202,10 +166,6 @@ public class FriendBot {
         }
     }
 
-    // =========================================================================
-    // MOVEMENT (delegates obstacle/door/swim/climb handling to FriendNav)
-    // =========================================================================
-
     private void moveToward(Vec3d target, double speed) {
         nav.moveToward(fakePlayer, target, speed, 0.5);
     }
@@ -213,10 +173,6 @@ public class FriendBot {
     private void stopMoving() {
         nav.stop(fakePlayer);
     }
-
-    // =========================================================================
-    // PROACTIVE WORLD REACTIONS
-    // =========================================================================
 
     private void maybeReactToWorld() {
         ServerPlayerEntity target = getFollowTarget();
@@ -226,7 +182,7 @@ public class FriendBot {
         String situation = pickReactionPrompt(target);
         if (situation == null) return;
 
-        proactiveCooldown = 400 + random.nextInt(800); // 20-60s before another unprompted line
+        proactiveCooldown = 400 + random.nextInt(800);
         String name = target.getName().getString();
         Thread t = new Thread(() -> {
             String line = geminiClient.reactUnprompted(name, worldCtx, situation);
@@ -245,7 +201,7 @@ public class FriendBot {
 
         Box range = new Box(fakePlayer.getBlockPos()).expand(15);
         boolean hostilesNear = !world.getEntitiesByClass(MobEntity.class, range,
-            m -> m.isHostile() && m != fakePlayer).isEmpty();
+            m -> (m instanceof HostileEntity) && m != fakePlayer).isEmpty();
 
         if (hostilesNear) return "You just noticed something hostile nearby that hasn't attacked yet.";
         if (hp <= 8) return "You just noticed the player you're with is at low health.";
@@ -255,17 +211,6 @@ public class FriendBot {
         if (random.nextInt(3) == 0) return "Nothing urgent is happening — say something small and random, like real friends do during quiet moments in a game.";
         return null;
     }
-
-    // =========================================================================
-    // AUTO-EQUIP / PICKUP (handled by FriendInventory + vanilla engine)
-    // =========================================================================
-
-    // Item pickup within range is automatic for real players in vanilla MC —
-    // no manual tracking needed since fakePlayer.getInventory() reflects truth.
-
-    // =========================================================================
-    // STATE BEHAVIORS
-    // =========================================================================
 
     private void tickFollow() {
         ServerPlayerEntity target = getFollowTarget();
@@ -295,7 +240,7 @@ public class FriendBot {
 
         List<MobEntity> hostiles = world.getEntitiesByClass(
             MobEntity.class, range,
-            mob -> mob.isHostile() && mob != fakePlayer
+            mob -> (mob instanceof HostileEntity) && mob != fakePlayer
         );
 
         if (hostiles.isEmpty()) {
@@ -318,7 +263,7 @@ public class FriendBot {
                 stopMoving();
                 Vec3d diff = target.getEyePos().subtract(fakePlayer.getEyePos());
                 fakePlayer.setYaw((float) Math.toDegrees(Math.atan2(-diff.x, diff.z)));
-                fakePlayer.getActionPack().start(
+                actionPack().start(
                     EntityPlayerActionPack.ActionType.ATTACK,
                     EntityPlayerActionPack.Action.once()
                 );
@@ -358,7 +303,7 @@ public class FriendBot {
             fakePlayer.setYaw((float) Math.toDegrees(Math.atan2(-diff.x, diff.z)));
             fakePlayer.setPitch((float) Math.toDegrees(-Math.atan2(diff.y, Math.sqrt(diff.x*diff.x+diff.z*diff.z))));
 
-            fakePlayer.getActionPack().start(
+            actionPack().start(
                 EntityPlayerActionPack.ActionType.ATTACK,
                 EntityPlayerActionPack.Action.continuous()
             );
@@ -366,7 +311,7 @@ public class FriendBot {
 
             ServerWorld world = fakePlayer.getServerWorld();
             if (world.getBlockState(mineTarget).isAir() || mineBreakTimer > 80) {
-                fakePlayer.getActionPack().start(
+                actionPack().start(
                     EntityPlayerActionPack.ActionType.ATTACK,
                     EntityPlayerActionPack.Action.once()
                 );
@@ -380,7 +325,7 @@ public class FriendBot {
         }
 
         if (stateTimer > 1800) {
-            fakePlayer.getActionPack().stop(EntityPlayerActionPack.ActionType.ATTACK);
+            actionPack().stop(EntityPlayerActionPack.ActionType.ATTACK);
             broadcastMessage("that's enough mining for now, found some decent stuff though");
             currentState = BotState.FOLLOWING;
             mineTarget = null;
@@ -420,7 +365,7 @@ public class FriendBot {
 
                 fakePlayer.getInventory().setStack(fakePlayer.getInventory().selectedSlot,
                     new ItemStack(Items.OAK_PLANKS, 64));
-                fakePlayer.getActionPack().start(
+                actionPack().start(
                     EntityPlayerActionPack.ActionType.USE,
                     EntityPlayerActionPack.Action.once()
                 );
@@ -478,7 +423,7 @@ public class FriendBot {
         }
 
         if (stateTimer == 20) {
-            fakePlayer.getActionPack().start(
+            actionPack().start(
                 EntityPlayerActionPack.ActionType.USE,
                 EntityPlayerActionPack.Action.once()
             );
@@ -518,14 +463,12 @@ public class FriendBot {
     }
 
     private void tickRiding() {
-        // While riding, just let the vehicle do its thing — Friend isn't driving
-        // unless told to, she's along for the ride like a real passenger would be.
         if (fakePlayer == null || !fakePlayer.hasVehicle()) {
             currentState = BotState.FOLLOWING;
             stateTimer = 0;
             return;
         }
-        if (stateTimer > 6000) { // ~5 min safety timeout
+        if (stateTimer > 6000) {
             broadcastMessage("ok I've been sitting here a while, getting off");
             fakePlayer.stopRiding();
             currentState = BotState.FOLLOWING;
@@ -537,10 +480,6 @@ public class FriendBot {
         if (tickCounter % 80 == 0) doIdleAnimation();
         if (stateTimer > 200) { currentState = BotState.FOLLOWING; stateTimer = 0; }
     }
-
-    // =========================================================================
-    // RIDING / DISMOUNTING
-    // =========================================================================
 
     private void mountNearestVehicle() {
         if (fakePlayer == null) return;
@@ -559,7 +498,6 @@ public class FriendBot {
 
         double distSq = fakePlayer.squaredDistanceTo(nearest);
         if (distSq > 9.0) {
-            // Walk to it first, then mount once close (handled over a few ticks via state).
             moveToward(nearest.getPos(), 0.8);
         }
         if (distSq <= 4.0) {
@@ -569,16 +507,10 @@ public class FriendBot {
         }
     }
 
-    // =========================================================================
-    // GIVING ITEMS
-    // =========================================================================
-
     private void giveItemTo(ServerPlayerEntity recipient, String requestedText) {
         if (fakePlayer == null || recipient == null) return;
         var inv = fakePlayer.getInventory();
 
-        // Find first non-empty hotbar/inventory slot that loosely matches a keyword
-        // from the request, falling back to whatever she's holding.
         String lower = requestedText.toLowerCase();
         int foundSlot = -1;
         for (int i = 0; i < inv.size(); i++) {
@@ -605,7 +537,6 @@ public class FriendBot {
         ItemStack giveStack = stack.split(Math.min(stack.getCount(), 1));
         recipient.getInventory().insertStack(giveStack);
         if (!giveStack.isEmpty() && giveStack.getCount() > 0) {
-            // If insertStack couldn't take it all, drop the remainder at her feet.
             recipient.dropItem(giveStack, false);
         }
     }
@@ -614,10 +545,6 @@ public class FriendBot {
         String[] words = text.split("\\s+");
         return words.length > 0 ? words[words.length - 1] : "";
     }
-
-    // =========================================================================
-    // OPEN CONTAINER / DOOR ON REQUEST
-    // =========================================================================
 
     private void openNearestInteractable() {
         if (fakePlayer == null) return;
@@ -637,7 +564,7 @@ public class FriendBot {
                                 if (nav.isDoorOrGate(state)) {
                                     nav.openDoorOrGate(fakePlayer, world, check, state);
                                 } else {
-                                    fakePlayer.getActionPack().start(
+                                    actionPack().start(
                                         EntityPlayerActionPack.ActionType.USE,
                                         EntityPlayerActionPack.Action.once()
                                     );
@@ -651,10 +578,6 @@ public class FriendBot {
         }
         broadcastMessage("don't see a chest or door close enough to open");
     }
-
-    // =========================================================================
-    // EMOTES
-    // =========================================================================
 
     public void doEmote(String type) {
         if (fakePlayer == null) return;
@@ -673,10 +596,6 @@ public class FriendBot {
         }
     }
 
-    // =========================================================================
-    // DANGER CHECK
-    // =========================================================================
-
     private void checkForDanger() {
         if (fakePlayer == null) return;
         ServerWorld world = fakePlayer.getServerWorld();
@@ -684,7 +603,7 @@ public class FriendBot {
 
         boolean danger = !world.getEntitiesByClass(
             MobEntity.class, range,
-            mob -> mob.isHostile() && mob != fakePlayer
+            mob -> (mob instanceof HostileEntity) && mob != fakePlayer
         ).isEmpty();
 
         if (danger) {
@@ -694,10 +613,6 @@ public class FriendBot {
             dangerCooldown = 200;
         }
     }
-
-    // =========================================================================
-    // HANDLE PLAYER MESSAGE
-    // =========================================================================
 
     public void handlePlayerMessage(ServerPlayerEntity player, String userText) {
         String playerName = player.getName().getString();
@@ -782,10 +697,6 @@ public class FriendBot {
             case CHAT -> reply(player, geminiClient.chat(playerName, worldCtx, userText));
         }
     }
-
-    // =========================================================================
-    // HELPERS
-    // =========================================================================
 
     private void reply(ServerPlayerEntity player, String msg) {
         String prefix = "§d[" + FriendConfig.getBotName() + "] §f";
