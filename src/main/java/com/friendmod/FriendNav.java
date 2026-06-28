@@ -4,11 +4,7 @@ import carpet.patches.EntityPlayerMPFake;
 import net.minecraft.block.*;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.state.property.Properties;
-import net.minecraft.util.ActionResult;
-import net.minecraft.util.Hand;
-import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.Vec3d;
 
 /**
@@ -145,12 +141,8 @@ public class FriendNav {
      */
     public void openDoorOrGate(EntityPlayerMPFake fp, ServerWorld world, BlockPos pos, net.minecraft.block.BlockState state) {
         if (state.contains(Properties.OPEN) && !state.get(Properties.OPEN)) {
-            BlockHitResult hit = new BlockHitResult(Vec3d.ofCenter(pos), Direction.UP, pos, false);
-            ActionResult result = fp.interactBlock(fp, world, fp.getMainHandStack(), Hand.MAIN_HAND, hit);
-            if (result == ActionResult.PASS) {
-                // Iron doors/trapdoors need redstone normally — we force it for fake-player use.
-                world.setBlockState(pos, state.with(Properties.OPEN, true));
-            }
+            // Force open the door/gate directly — works for iron doors too
+            world.setBlockState(pos, state.with(Properties.OPEN, true));
             world.playSound(null, pos, state.getBlock() instanceof FenceGateBlock
                 ? net.minecraft.sound.SoundEvents.BLOCK_FENCE_GATE_OPEN
                 : net.minecraft.sound.SoundEvents.BLOCK_WOODEN_DOOR_OPEN,
