@@ -14,7 +14,7 @@ public class FriendConfig {
 
     private static final Path CONFIG_PATH = Paths.get("config", "friendmod.properties");
 
-    private static String geminiApiKey = "PASTE_YOUR_GEMINI_KEY_HERE";
+    private static String geminiApiKey = "AQ.Ab8RN6KD04p1GhPFCTXUfxhfKp4uyeZItO71kHhEto5GCdOl8A";
     private static String geminiModel   = "gemini-1.5-flash";
     private static String skinUrl       = ""; // optional custom skin URL
     private static String botName       = "Friend";
