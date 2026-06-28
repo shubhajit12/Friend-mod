@@ -17,8 +17,10 @@ jobs:
           java-version: 21
           distribution: temurin
 
-      - name: Setup Gradle
+      - name: Setup Gradle 8.8
         uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.8
 
       - name: Generate Gradle wrapper
         run: gradle wrapper --gradle-version 8.8
