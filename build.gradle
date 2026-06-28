@@ -1,0 +1,60 @@
+plugins {
+	id 'fabric-loom' version '1.9-SNAPSHOT'
+	id 'maven-publish'
+}
+
+version = '3.2.0'
+group = 'com.friendmod'
+
+base {
+	archivesName = 'friendmod'
+}
+
+repositories {
+	mavenCentral()
+	maven { url 'https://api.modrinth.com/maven' }
+}
+
+loom {
+	mods {
+		"friendmod" {
+			sourceSet sourceSets.main
+		}
+	}
+}
+
+dependencies {
+	// Minecraft 1.21.11
+	minecraft "com.mojang:minecraft:1.21.11"
+	mappings "net.fabricmc:yarn:1.21.11+build.1:v2"
+	modImplementation "net.fabricmc:fabric-loader:0.16.14"
+	modImplementation "net.fabricmc.fabric-api:fabric-api:0.140.2+1.21.11"
+
+	// Carpet 1.4.194 for 1.21.11 — compile only, user installs the jar separately
+	modCompileOnly("maven.modrinth:carpet:HzPcczDK") { transitive = false }
+}
+
+processResources {
+	inputs.property "version", project.version
+	filteringCharset "UTF-8"
+	filesMatching("fabric.mod.json") {
+		expand "version": project.version
+	}
+}
+
+def targetJavaVersion = 21
+tasks.withType(JavaCompile).configureEach {
+	it.options.encoding = "UTF-8"
+	it.options.release = targetJavaVersion
+}
+
+java {
+	toolchain.languageVersion = JavaLanguageVersion.of(targetJavaVersion)
+	withSourcesJar()
+}
+
+jar {
+	from("LICENSE") {
+		rename { "${it}_${project.base.archivesName.get()}" }
+	}
+}

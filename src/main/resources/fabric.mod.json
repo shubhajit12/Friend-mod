@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "friendmod",
+  "version": "${version}",
+  "name": "Friend Mod",
+  "description": "AI companion powered by Gemini. Real player entity via Carpet Mod — doors, swimming, riding, smart inventory, natural conversation.",
+  "authors": ["You"],
+  "contact": {},
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.friendmod.FriendMod"]
+  },
+  "mixins": [],
+  "depends": {
+    "fabricloader": ">=0.16.14",
+    "fabric-api": "*",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "carpet": "*"
+  }
+}
